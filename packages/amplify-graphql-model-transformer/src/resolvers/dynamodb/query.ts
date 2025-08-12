@@ -144,12 +144,45 @@ export const generateListRequestTemplate = (): string => {
         ),
       ]),
     ),
-    ifElse(
+    // Determine if we have a hash key query expression prepared
+    set(
+      ref('hasHashKey'),
       and([
         not(methodCall(ref('util.isNull'), ref(modelQueryObj))),
         not(methodCall(ref('util.isNullOrEmpty'), ref(`${modelQueryObj}.expression`))),
       ]),
+    ),
+    // Determine model primary key argument name dynamically when provided by upstream (fallback to 'id')
+    set(
+      ref('pkArgName'),
+      methodCall(
+        ref('util.defaultIfNull'),
+        ref('ctx.stash.QueryRequestVariables.partitionKey'),
+        str('id'),
+      ),
+    ),
+    // Detect if a range key-like argument was supplied without a hash key
+    set(
+      ref('hasRangeKey'),
+      and([
+        not(methodCall(ref('util.isNull'), ref('args'))),
+        // $args.keySet().contains($pkArgName)
+        raw('$args.keySet().contains($pkArgName)'),
+      ]),
+    ),
+    // Validate: RangeKey without HashKey => Error
+    iff(
+      and([ref('hasRangeKey'), not(ref('hasHashKey'))]),
+      methodCall(
+        ref('util.error'),
+        str('When providing the index sort key you must also provide the index hash key'),
+        str('InvalidArgumentsError'),
+      ),
+    ),
+    ifElse(
+      ref('hasHashKey'),
       compoundExpression([
+        // HashKey alone OR Hash + Range => Query operation
         qref(methodCall(ref(`${requestVariable}.put`), str('operation'), str('Query'))),
         qref(methodCall(ref(`${requestVariable}.put`), str('query'), ref(modelQueryObj))),
         ifElse(
@@ -158,7 +191,15 @@ export const generateListRequestTemplate = (): string => {
           set(ref(`${requestVariable}.scanIndexForward`), bool(true)),
         ),
       ]),
-      qref(methodCall(ref(`${requestVariable}.put`), str('operation'), str('Scan'))),
+      compoundExpression([
+        // No Hash no Range => Scan operation with sortDirection support
+        qref(methodCall(ref(`${requestVariable}.put`), str('operation'), str('Scan'))),
+        ifElse(
+          and([not(methodCall(ref('util.isNull'), ref('args.sortDirection'))), equals(ref('args.sortDirection'), str('DESC'))]),
+          set(ref(`${requestVariable}.scanIndexForward`), bool(false)),
+          set(ref(`${requestVariable}.scanIndexForward`), bool(true)),
+        ),
+      ]),
     ),
     iff(not(methodCall(ref('util.isNull'), ref(indexNameVariable))), set(ref(`${requestVariable}.index`), ref(indexNameVariable))),
     toJson(ref(requestVariable)),
