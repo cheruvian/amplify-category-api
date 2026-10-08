@@ -614,7 +614,8 @@ export const makeQueryResolver = (
   }
 };
 
-// Partial non-null updates must supply every component to keep the derived key consistent.
+// Updates that supply mutable sort-key components must supply every component to keep the derived key consistent.
+// Primary-key fields only identify an existing item and must not trigger secondary-key reconstruction on update.
 // Creates may omit nullable components; explicitly clearing one removes secondary index membership.
 // Secondary-index key construction consumes HasSeenSomeKeyArg and keyFieldNames set by this validation.
 const validateIndexArgumentSnippet = (config: IndexDirectiveConfiguration, keyOperation: 'create' | 'update'): string => {
@@ -630,6 +631,22 @@ const validateIndexArgumentSnippet = (config: IndexDirectiveConfiguration, keyOp
     'false';
   const missingRequired =
     keyOperation === 'create' ? ' && !$optionalIndexKeyFields.contains($keyFieldName)' : ` && !(${explicitlyCleared})`;
+  const primaryKeySortKeys = config.primaryKeyField?.directives
+    ?.find((directive) => directive.name.value === 'primaryKey')
+    ?.arguments?.find((argument) => argument.name.value === 'sortKeyFields')?.value;
+  const primaryKeyFields = new Set([
+    config.primaryKeyField?.name.value ?? 'id',
+    ...(primaryKeySortKeys?.kind === Kind.LIST
+      ? primaryKeySortKeys.values.flatMap((value) => (value.kind === Kind.STRING ? [value.value] : []))
+      : []),
+  ]);
+  const immutableFieldCheck =
+    keyOperation === 'update'
+      ? sortKeyFields
+          .filter((field) => primaryKeyFields.has(field))
+          .map((field) => ` && $keyFieldName != "${field}"`)
+          .join('')
+      : '';
 
   return printBlock(`Validate ${keyOperation} mutation for @index '${name}'`)(
     compoundExpression([
@@ -637,7 +654,11 @@ const validateIndexArgumentSnippet = (config: IndexDirectiveConfiguration, keyOp
       set(ref(ResourceConstants.SNIPPETS.HasSeenSomeKeyArg), bool(false)),
       set(ref('keyFieldNames'), list(sortKeyFields.map((f) => str(f)))),
       forEach(ref('keyFieldName'), ref('keyFieldNames'), [
-        iff(raw('$mergedValues.containsKey("$keyFieldName")'), set(ref(ResourceConstants.SNIPPETS.HasSeenSomeKeyArg), bool(true)), true),
+        iff(
+          raw(`$mergedValues.containsKey("$keyFieldName")${immutableFieldCheck}`),
+          set(ref(ResourceConstants.SNIPPETS.HasSeenSomeKeyArg), bool(true)),
+          true,
+        ),
       ]),
       forEach(ref('keyFieldName'), ref('keyFieldNames'), [
         iff(

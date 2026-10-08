@@ -32,8 +32,16 @@ For this model, `createRequest(input: { owner: "owner", requestId: "request" })`
 does not require a conversation. Supplying `conversationId` constructs the index
 key using the generated creation timestamp.
 
-Updates unrelated to the index preserve its existing key. Setting a nullable
+Updates unrelated to the index preserve its existing key. Primary-key fields
+identify the existing item and do not trigger secondary-index reconstruction on
+update. For example, when a message's primary key includes `conversationId` and
+`messageId` and its secondary sort key is `conversationId#createdAt`, updating
+only its content does not require resupplying `createdAt`. Its existing timestamp
+and secondary index key remain unchanged.
+
+Setting a nullable
 component to `null` removes the derived index attribute. Supplying every component
-with non-null values restores index membership. Partial non-null key updates
+with non-null values restores index membership. Updates supplying a mutable
+sort-key component with a non-null value
 still require all components: the resolver does not read the existing item to
 reconstruct the composite key. Primary-key validation is unchanged.
